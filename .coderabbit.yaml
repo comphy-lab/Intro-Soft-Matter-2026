@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-GB"
+early_access: false
+
+reviews:
+  profile: "chill"
+  high_level_summary: false
+  # Student pull requests are assessed work: no automatic reviews, so an automated
+  # comment cannot hand a student the answer. Maintainers can request a review.
+  auto_review:
+    enabled: false
+  path_filters:
+    - "!submissions/**"
+  path_instructions:
+    - path: ".github/workflows/**"
+      instructions: |
+        The validation workflow must never execute submitted code and must not
+        use secrets. Check that annotations escape file names.
+    - path: "AGENTS.md"
+      instructions: |
+        Canonical repo operating manual; CLAUDE.md defers to it. Check for
+        stale or contradictory instructions.

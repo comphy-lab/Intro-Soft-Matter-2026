@@ -1,0 +1,145 @@
+name: Validate student submission
+
+# pull_request_target runs this file from the base branch, so a pull request
+# cannot change its own validator. The pull request is fetched as Git data only
+# (commits and trees, no file contents); nothing from it is checked out or run.
+on:
+  pull_request_target:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate-submission:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate paths, filenames and file types without running submitted code
+        env:
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO_URL: https://github.com/${{ github.repository }}.git
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$AUTHOR_ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR)
+              echo "Trusted maintainer PR: student filename rules do not apply."
+              exit 0
+              ;;
+          esac
+
+          # Escape values for workflow-command annotations, so a crafted
+          # filename cannot start a new workflow command.
+          esc() {
+            local s=$1
+            s=${s//'%'/'%25'}
+            s=${s//$'\r'/'%0D'}
+            s=${s//$'\n'/'%0A'}
+            printf '%s' "$s"
+          }
+          esc_prop() {
+            local s
+            s=$(esc "$1")
+            s=${s//':'/'%3A'}
+            s=${s//','/'%2C'}
+            printf '%s' "$s"
+          }
+
+          # History and trees only: blobs are never downloaded.
+          git init -q pr-data
+          cd pr-data
+          git remote add origin "$REPO_URL"
+          git fetch -q --no-tags --filter=blob:none origin "$BASE_SHA" "$HEAD_SHA"
+
+          # Compare against the merge base, so commits that reached main after
+          # the student branched are not counted as the student's changes.
+          # --no-renames reports a moved file as a deletion plus an addition.
+          range="${BASE_SHA}...${HEAD_SHA}"
+
+          errors=0
+          found_readme=0
+          found_log=0
+          changed_count=0
+          deleted_count=0
+          required_prefix="${PR_AUTHOR}_"
+
+          while IFS= read -r -d '' path; do
+            deleted_count=$((deleted_count + 1))
+          done < <(git diff --no-renames --diff-filter=D --name-only -z "$range")
+
+          if ((deleted_count > 0)); then
+            echo "::error::Student Pull Requests must not delete, move or rename existing files."
+            errors=1
+          fi
+
+          while IFS= read -r -d '' path; do
+            changed_count=$((changed_count + 1))
+            shown=$(esc_prop "$path")
+            shown_msg=$(esc "$path")
+
+            if [[ "$path" == *[[:cntrl:]]* ]]; then
+              echo "::error::A filename contains control characters: $shown_msg"
+              errors=1
+              continue
+            fi
+
+            if [[ "$path" != submissions/* ]]; then
+              echo "::error file=$shown::Student files must be placed directly in submissions/."
+              errors=1
+              continue
+            fi
+
+            filename=${path#submissions/}
+            if [[ "$filename" == */* ]]; then
+              echo "::error file=$shown::Do not create nested folders inside submissions/."
+              errors=1
+              continue
+            fi
+
+            if [[ "$filename" != "$required_prefix"* ]]; then
+              echo "::error file=$shown::Filename must start with $(esc "$required_prefix")"
+              errors=1
+              continue
+            fi
+
+            mode=$(git --literal-pathspecs ls-tree "$HEAD_SHA" -- "$path" | awk '{print $1}')
+            if [[ "$mode" != "100644" && "$mode" != "100755" ]]; then
+              echo "::error file=$shown::Only regular files are accepted (no symbolic links or submodules)."
+              errors=1
+              continue
+            fi
+
+            student_filename=${filename#"$required_prefix"}
+            lower=$(printf '%s' "$student_filename" | tr '[:upper:]' '[:lower:]')
+            if [[ "$lower" == "readme.md" ]]; then
+              found_readme=1
+            fi
+            if [[ "$lower" == "ai-log.md" || "$lower" == "ai-log.txt" ]]; then
+              found_log=1
+            fi
+          done < <(git diff --no-renames --diff-filter=d --name-only -z "$range")
+
+          if ((changed_count == 0 && deleted_count == 0)); then
+            echo "::error::The Pull Request contains no changed files."
+            errors=1
+          fi
+
+          if ((found_readme == 0)); then
+            echo "::error::Include submissions/$(esc "$required_prefix")README.md: problem, approach, findings and how to run your code."
+            errors=1
+          fi
+          if ((found_log == 0)); then
+            echo "::error::Include submissions/$(esc "$required_prefix")AI-log.md: prompts, what you checked and what you changed."
+            errors=1
+          fi
+
+          if ((errors != 0)); then
+            exit 1
+          fi
+
+          echo "Submission paths, filenames and file types are valid. Submitted code was not executed."

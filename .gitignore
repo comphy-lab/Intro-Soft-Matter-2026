@@ -1,0 +1,21 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Julia, MATLAB and other local artefacts
+*.asv
+*.jl.cov
+*.jl.mem
+
+# Local agent state
+.comphy/
